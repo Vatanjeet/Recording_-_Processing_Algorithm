@@ -1,126 +1,238 @@
-int i = 0;
-const int c=256; //number_of_recorded_samples
-const int d=44; //number_of_old_samples
-const int n=1; //number_of_harmonics
-int h=c/2; //half_of_recorded_samples
 
-//read previous values
-float signal_transmitted_read_ahead[d];
+//Data_Sampler_07: Receives acknowledgement from RPi
 
-//read main data
-float signal_transmitted[c+d+8];
+int threshold=1;
 
-//variables for throshold
-int temp_transmitted[8];
+const int array_size=192;
+const int read_ahead=2;
+const int temp_size=6; //Always keep an even number
+const int temp_half=(temp_size/2);
+
+int i=0;
 int avg_old;
 int avg_new;
-int threshold = 8;
+int time_taken;
 
-//FFT global variables
-float a0[c+d+8];
-float an_1[c+d+8];
-//float bn_1[c+d+8];
+float time_for_one_set = 0;
+float DUE_ADC_Polling_time = 0; //in microseconds
+float Time_A0 = 0;
 
-void setup()
+int data_transmitted_A0[array_size+temp_size+read_ahead];
+int temp_A0[temp_size];
+
+int data_transmitted_A2[array_size+temp_size+read_ahead];
+int temp_A2[temp_size];
+
+int data_transmitted_A4[array_size+temp_size+read_ahead];
+int temp_A4[temp_size];
+
+int data_transmitted_A7[array_size+temp_size+read_ahead];
+int temp_A7[temp_size];
+
+long delay_time_us=4;
+
+void setup() 
 {
-  Serial.begin(9600);
-  pinMode(A0, INPUT);
+ Serial.begin(9600);
+ Serial1.begin(9600); //baud rate 9600 for the Bluetooth communication
+ //analogReadResolution(12);
+ pinMode(A0,INPUT);
+ pinMode(A2,INPUT);
+ pinMode(A4,INPUT);
+ pinMode(A7,INPUT);
 }
 
-void loop()
+void loop() 
 {
-  Read_ahead();
-  Threshold();
-  FFT_a0();
-  FFT_an_1();
-  //FFT_bn_1();
-  //print_data();
-}
-
-void Read_ahead()
-{
-  for(i=0;i<d;i++) //read_ahead
+  if (Serial1.available() > 0)
   {
-    signal_transmitted_read_ahead[i]=analogRead(A0);
+    String data = Serial1.readStringUntil('\n');
+    Serial.print("RPi sent: ");
+    //Serial1.print("Arduino acknowledges: ");
+    Serial.println(data);
+    //Serial1.println(data);
+    delay(1000);
   }
   avg_old=0;
   avg_new=0;
-  for(i=0;i<8;i++)
-  {
-    temp_transmitted[i]=analogRead(A0);
-  }
-  for(i=0;i<4;i++)
-  {
-    avg_old+=temp_transmitted[i];
-  }
-  for(i=5;i<8;i++)
-  {
-    avg_new += temp_transmitted[i];
-  }
-}
 
-void Threshold()
-{
-  if(avg_new-avg_old>threshold) //start recording data
+  for(i=0;i<read_ahead;i++) //Read ahead, before the impact
   {
-    for(i=d+8;i<c+d+8;i++) //main recorded values
-    {
-      signal_transmitted[i]=analogRead(A0);
-    }
-    for(i=0;i<d;i++) //copy read ahead values
-    {
-      signal_transmitted[i]=signal_transmitted_read_ahead[i];
-    }
-    for(i=0;i<8;i++) //copy main values
-    {
-      signal_transmitted[i+d]=temp_transmitted[i];
-    }
+    data_transmitted_A0[i]=analogRead(A0);
+    data_transmitted_A2[i]=analogRead(A2);
+    data_transmitted_A4[i]=analogRead(A4);
+    data_transmitted_A7[i]=analogRead(A7);
+    delayMicroseconds(delay_time_us);
   }
-}
+  for(i=0;i<temp_size;i++)
+  {
+   temp_A0[i]=analogRead(A0);
+   temp_A2[i]=analogRead(A2);
+   temp_A4[i]=analogRead(A4);
+   temp_A7[i]=analogRead(A7);
+   delayMicroseconds(delay_time_us);
+  }
+  //Serial.println("Loop Start");
+  for(i=0;i<temp_half;i++) //Comparison of recorded values for detecting impact: Time of around 5 microsends for temp_size[] of 10 spent in this check is ignored
+  {
+   if(temp_A7[i]<2048)
+   {
+     avg_old+=((2048-temp_A0[i])+2048); //Rectification of -ve values
+     //Serial.print("avg_old: ");
+     //Serial.println(avg_old);
+   }
+   if(temp_A7[i]>=2048)
+   {
+     avg_old+=temp_A0[i];
+     //Serial.print("avg_old: ");
+     //Serial.println(avg_old);  
+   }
+  }
+  for(i=temp_half;i<temp_size;i++)
+  {
+   if(temp_A7[i]<2048)
+   {
+     avg_new+=(2048-temp_A7[i])+2048; //Rectification of -ve values
+     //Serial.print("avg_new: ");
+     //Serial.println(avg_new);
+   }
 
-void FFT_a0()
-{
-  float a0_sum=0;
-  float sum_of_recroded_data;
-  for(i=0;i<c+d+8;i++)
-  {
-    sum_of_recroded_data=+signal_transmitted[i];
+   if(temp_A7[i]>=2048)
+   {
+     avg_new+=temp_A7[i];  
+     //Serial.print("avg_new: ");
+     //Serial.println(avg_new);
+   }
   }
-   a0_sum=(1/c)*sum_of_recroded_data;
-   for(i=0;i<c+d+8;i++)
+  //Serial.print("Difference: ");
+  //Serial.println(avg_new-avg_old);
+  //delay(1000);
+  if(avg_new-avg_old>threshold||avg_old-avg_new>threshold)
   {
-    a0[i]=a0_sum;
-  } 
-}
+    for(i=0;i<temp_size;i++) //First, copy the data into arrays; time spent is ignored
+    {
+      data_transmitted_A0[i+read_ahead]=temp_A0[i];
+      data_transmitted_A2[i+read_ahead]=temp_A2[i];
+      data_transmitted_A4[i+read_ahead]=temp_A4[i];
+      data_transmitted_A7[i+read_ahead]=temp_A7[i];
+    }
+    time_taken=millis();
+    for(i=temp_size+read_ahead;i<array_size+temp_size+read_ahead;i++) //Read the remaining elements from ADC channels
+    {
+      data_transmitted_A0[i]=analogRead(A0);
+      data_transmitted_A2[i]=analogRead(A2);
+      data_transmitted_A4[i]=analogRead(A4);
+      data_transmitted_A7[i]=analogRead(A7);
+      delayMicroseconds(delay_time_us);
+    }
+    time_taken=millis()-time_taken;
+    time_for_one_set /*of 4 readings*/= time_taken*1000/(array_size); //in microseconds
+    DUE_ADC_Polling_time = (time_for_one_set-delay_time_us)/4; //in microseconds
+    
+    for(i=0;i<array_size+temp_size+read_ahead;i++) //Normalize the recorded data
+    {
+      data_transmitted_A0[i]-=2048;
+      data_transmitted_A2[i]-=2048;
+      data_transmitted_A4[i]-=2048;
+      data_transmitted_A7[i]-=2048;
+    }
+    
+    //Transmit summary over USB
+    Serial.print('\n');
+    Serial.print("Detection threshold value:");
+    Serial.println(threshold);
+    Serial.print("Difference value:");
+    Serial.println(avg_new-avg_old);
+    Serial.print("Time between samples(us):");
+    Serial.println(delay_time_us);
+    Serial.print("Time taken for all samples(ms):");
+    Serial.println(time_taken);
 
-void FFT_an_1()
-{
-  int j=0;
-  float an_1_for_external_loop;
-  for(i=0;i<n;i++)
-  {
-    calculate_internal_loop_for_an_1();
+    //Print headers via USB
+    Serial.print("Time_Interval"); //time_for_one_set
+    Serial.print(",");
+    Serial.print("Time_ADC0");
+    Serial.print(",");
+    Serial.print("ADC0");
+    Serial.print(",");
+    Serial.print("Time_ADC2");
+    Serial.print(",");
+    Serial.print("ADC2");
+    Serial.print(",");
+    Serial.print("Time_ADC4");
+    Serial.print(",");
+    Serial.print("ADC4");
+    Serial.print(",");
+    Serial.print("Time_ADC7");
+    Serial.print(",");
+    Serial.print("ADC7");
+    Serial.print('\n');
+    //Print headers via bluetooth
+    Serial1.print("Time_Interval"); //time_for_one_set
+    Serial1.print(",");
+    Serial1.print("Time_ADC0");
+    Serial1.print(",");
+    Serial1.print("ADC0");
+    Serial1.print(",");
+    Serial1.print("Time_ADC2");
+    Serial1.print(",");
+    Serial1.print("ADC2");
+    Serial1.print(",");
+    Serial1.print("Time_ADC4");
+    Serial1.print(",");
+    Serial1.print("ADC4");
+    Serial1.print(",");
+    Serial1.print("Time_ADC7");
+    Serial1.print(",");
+    Serial1.print("ADC7");
+    Serial1.print('\n');
+    Time_A0=0;
+    for(i=0;i<array_size+temp_size+read_ahead;i++)
+    {
+       //Transmission via Bluetooth and USB
+       Serial.print(time_for_one_set); //time_for_one_set
+       Serial.print(",");
+       Serial.print(Time_A0);
+       Serial.print(",");
+       Serial.print(data_transmitted_A0[i]);
+       Serial.print(",");
+       Serial1.print(time_for_one_set); //time_for_one_set
+       Serial1.print(",");
+       Serial1.print(Time_A0);
+       Serial1.print(",");
+       Serial1.print(data_transmitted_A0[i]);
+       Serial1.print(",");
+       Time_A0=Time_A0+DUE_ADC_Polling_time;
+       Serial.print(Time_A0);
+       Serial.print(",");
+       Serial.print(data_transmitted_A2[i]);
+       Serial.print(",");
+       Serial1.print(Time_A0);
+       Serial1.print(",");
+       Serial1.print(data_transmitted_A2[i]);
+       Serial1.print(",");
+       Time_A0=Time_A0+DUE_ADC_Polling_time;
+       Serial.print(Time_A0);
+       Serial.print(",");
+       Serial.print(data_transmitted_A4[i]);
+       Serial.print(",");
+       Serial1.print(Time_A0);
+       Serial1.print(",");
+       Serial1.print(data_transmitted_A4[i]);
+       Serial1.print(",");
+       Time_A0=Time_A0+DUE_ADC_Polling_time;
+       Serial.print(Time_A0);
+       Serial.print(",");
+       Serial.print(data_transmitted_A7[i]);
+       Serial.print('\n');
+       Serial1.print(Time_A0);
+       Serial1.print(",");
+       Serial1.print(data_transmitted_A7[i]);
+       Serial1.print('\n');
+       Time_A0 = Time_A0+DUE_ADC_Polling_time+delay_time_us;
+    }
+    Serial1.print('\n');
+    Serial1.print("End");
+    Serial1.print('\n');
   }
-  for(j=0;j<c+d+8;j++)
-  {
-   an_1[j]=an_1_for_external_loop*cos((n*(j+1)*3.14)/h);
-  }
-}
-float calculate_internal_loop_for_an_1()
-{
-  int j=0;
-  float an_1_half[c+d+8];
-  float sum_an_1_half;
-  float an_1_for_external_loop;
-  for(j=0;j<c+d+8;j++)
-  {
-    an_1_half[j]=signal_transmitted[j]*cos((n*(j+1)*3.14)/h);
-  }
-  sum_an_1_half=0;
-  for(j=0;j<c+d+8;j++)
-  {
-    sum_an_1_half+=an_1_half[j];
-  }
-  an_1_for_external_loop=(1/h)*sum_an_1_half;
-  return an_1_for_external_loop;
 }
